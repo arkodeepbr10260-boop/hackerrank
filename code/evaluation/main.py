@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys, pandas as pd
-ROOT=Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve()
+ROOT = HERE.parents[1] if (HERE.parents[1] / 'dataset').exists() else HERE.parents[2]
 sys.path.insert(0,str(ROOT/'code'))
 from main import Engine
 
