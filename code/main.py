@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import os
 import re
 from pathlib import Path
 from itertools import combinations
@@ -27,6 +29,44 @@ def fmt_date(x):
     return pd.Timestamp(x).strftime('%Y-%m-%d')
 
 
+class LLMAdvisor:
+    """Optional LLM decision layer; all credentials and model choice come from env."""
+    def __init__(self, data_dir):
+        self.enabled = bool(os.getenv('OPENAI_API_KEY'))
+        self.client = None
+        self.data = Path(data_dir)
+        if self.enabled:
+            try:
+                from openai import OpenAI
+                self.client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+            except Exception:
+                self.enabled = False
+
+    def decide(self, req, engine):
+        if not self.enabled or self.client is None:
+            return None
+        user = str(req.user_id)
+        context = {
+            'request': req.to_dict(),
+            'profile': engine.profiles[engine.profiles.user_id == user].to_dict('records'),
+            'events': engine.events[engine.events.user_id == user].to_dict('records'),
+            'payment_options': engine.options[engine.options.request_id == req.request_id].to_dict('records'),
+            'messages': engine.messages[engine.messages.user_id == user].to_dict('records')
+        }
+        schema = {'type':'object','properties':{
+            'amount_safe_to_pay':{'type':'number'}, 'affordability_status':{'type':'string'},
+            'recommended_payment_method':{'type':'string'}, 'payment_plan':{'type':'string'},
+            'earliest_date_for_full_payment':{'type':'string'}, 'spending_changes_needed':{'type':'string'},
+            'decision_explanation':{'type':'string'}}, 'required':['amount_safe_to_pay','affordability_status','recommended_payment_method','payment_plan','earliest_date_for_full_payment','spending_changes_needed','decision_explanation'], 'additionalProperties':False}
+        prompt = ('Act as a conservative financial decision agent. Use only supplied evidence. Apply the 90-day safety check, reserve pending debits, ignore pending credits/unrealized gains, respect minimum balance and payment preferences. Return only JSON matching the schema.\nDATA:\n' + json.dumps(context, default=str))
+        try:
+            response = self.client.responses.create(model=os.getenv('OPENAI_MODEL','gpt-4.1-mini'), input=prompt, text={'format': {'type':'json_schema','name':'buy_or_wait_decision','strict':True,'schema':schema}})
+            obj = json.loads(response.output_text)
+            return [req.request_id, float(obj['amount_safe_to_pay']), str(obj['affordability_status']), str(obj['recommended_payment_method']), str(obj['payment_plan']), str(obj['earliest_date_for_full_payment']), str(obj['spending_changes_needed']), str(obj['decision_explanation'])]
+        except Exception:
+            return None
+
+
 class Engine:
     def __init__(self, data_dir=DATA):
         self.data = Path(data_dir)
@@ -42,6 +82,7 @@ class Engine:
         self.images = pd.read_csv(self.data / 'images.csv')
         self._fill_blank_amounts()
         self.message_rules = self._build_message_rules()
+        self.llm = LLMAdvisor(self.data)
 
     def _fill_blank_amounts(self):
         if self.events['amount'].isna().any():
@@ -443,7 +484,7 @@ class Engine:
         interval = 0 if pd.isna(opt.payment_frequency_days) else int(opt.payment_frequency_days)
         return [(opt.first_payment_date + pd.Timedelta(days=i * interval), float(opt.payment_amount)) for i in range(n)]
 
-    def solve(self, req):
+    def _solve_deterministic(self, req):
         profile = self.profiles[self.profiles.user_id == req.user_id].iloc[0]
         rd = pd.Timestamp(req.request_date)
         deadline = pd.Timestamp(req.desired_completion_date)
@@ -519,6 +560,14 @@ class Engine:
         cur = profile.home_currency
         expl = f'Do not proceed by {fmt_date(deadline)}; no eligible plan keeps the {cur} {money(profile.minimum_balance_to_keep)} minimum protected through the 90-day forecast.'
         return [req.request_id, safe, 'not_affordable', 'not_recommended', 'none', fmt_date(earliest) if earliest is not None else '', 'none', expl]
+
+    def solve(self, req):
+        """Use the LLM advisor when configured; retain a safe local fallback."""
+        if self.llm.enabled:
+            result = self.llm.decide(req, self)
+            if result is not None:
+                return result
+        return self._solve_deterministic(req)
 
 
 def run(request_file='requests.csv', output_path=OUT):
