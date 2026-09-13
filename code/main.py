@@ -11,25 +11,6 @@ DATA = ROOT / 'dataset'
 OUT = ROOT / 'output.csv'
 HORIZON_DAYS = 90
 
-IMAGE_AMOUNTS = {
-    'event_253': 4365000.0,
-    'event_1442': 100000.0,
-    'event_1545': 41272.0,
-    'event_1700': 2854.0,
-    'event_1786': 704.05,
-    'event_3051': 1995.0,
-    'event_3231': 8528.0,
-    'event_4535': 15339.0,
-    'event_5170': 723.0,
-    'event_6033': 79679.26,
-    'event_6859': 3650.0,
-    'event_7307': 33.50,
-    'event_7941': 2298.0,
-    'event_9421': 4543.0,
-    'event_9806': 9968.0,
-    'event_10521': 393.22,
-}
-
 def split_pipe(x):
     if pd.isna(x) or str(x).strip() == '':
         return set()
@@ -62,8 +43,6 @@ class Engine:
         self.message_rules = self._build_message_rules()
 
     def _fill_blank_amounts(self):
-        for eid, amt in IMAGE_AMOUNTS.items():
-            self.events.loc[self.events.event_id == eid, 'amount'] = amt
         if self.events['amount'].isna().any():
             try:
                 import pytesseract
