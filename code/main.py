@@ -5,8 +5,9 @@ from itertools import combinations
 import pandas as pd
 import numpy as np
 
-# Resolve relative to this file so the submitted archive runs in any grader workspace.
-ROOT = Path(__file__).resolve().parents[1]
+# Resolve correctly whether this file is run from code/ or the archive root.
+HERE = Path(__file__).resolve().parent
+ROOT = HERE if (HERE / 'dataset').exists() else HERE.parent
 DATA = ROOT / 'dataset'
 OUT = ROOT / 'output.csv'
 HORIZON_DAYS = 90
